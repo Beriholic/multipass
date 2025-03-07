@@ -27,7 +27,8 @@ namespace mp = multipass;
 namespace mpl = multipass::logging;
 namespace mpu = multipass::utils;
 
-mp::QemuVMProcessSpec::QemuVMProcessSpec(const mp::VirtualMachineDescription& desc, const QStringList& platform_args,
+mp::QemuVMProcessSpec::QemuVMProcessSpec(const mp::VirtualMachineDescription& desc,
+                                         const QStringList& platform_args,
                                          const mp::QemuVirtualMachine::MountArgs& mount_args,
                                          const std::optional<ResumeData>& resume_data)
     : desc{desc}, platform_args{platform_args}, mount_args{mount_args}, resume_data{resume_data}
@@ -52,7 +53,8 @@ QStringList mp::QemuVMProcessSpec::arguments() const
         }
         else
         {
-            mpl::log(mpl::Level::info, desc.vm_name,
+            mpl::log(mpl::Level::info,
+                     desc.vm_name,
                      fmt::format("Cannot determine QEMU machine type. Falling back to system default."));
         }
 
@@ -87,6 +89,45 @@ QStringList mp::QemuVMProcessSpec::arguments() const
              << "chardev:char0"
              // TODO Add a debugging mode with access to console
              << "-nographic";
+
+        // Firmware directories
+        try
+        {
+            mpu::snap_dir();
+        }
+        catch (const mp::SnapEnvironmentException&)
+        {
+            // Add a list of directories to check
+            QStringList dirs = QStringList();
+            dirs << "/usr/share/seabios/"
+                 << "/usr/share/seabios/x64/"
+                 << "/usr/share/ovmf/"
+                 << "/usr/share/ovmf/x64/"
+                 << "/usr/share/qemu/"
+                 << "/usr/share/qemu/x64/"
+                 << "/usr/share/qemu-efi/"
+                 << "/usr/share/qemu-efi/x64/"
+                 << "/usr/local/share/seabios/"
+                 << "/usr/local/share/seabios/x64/"
+                 << "/usr/local/share/ovmf/"
+                 << "/usr/local/share/ovmf/x64/"
+                 << "/usr/local/share/qemu/"
+                 << "/usr/local/share/qemu/x64/"
+                 << "/usr/local/share/qemu-efi/"
+                 << "/usr/local/share/qemu-efi/x64/";
+
+            // Now check every directory in the options, to make sure they exist
+            // If they do, add them to the args
+            for (const auto& value : dirs)
+            {
+                if (QDir(value).exists())
+                {
+                    mpl::log(mpl::Level::debug, desc.vm_name, fmt::format("Adding firmware directory: {}", value));
+                    args << "-L" << value;
+                }
+            }
+        }
+
         // Cloud-init disk
         args << "-cdrom" << desc.cloud_init_iso;
     }
@@ -206,11 +247,17 @@ profile %1 flags=(attach_disconnected) {
     catch (const mp::SnapEnvironmentException&)
     {
         signal_peer = "unconfined";
-        firmware = "/usr{,/local}/share/{seabios,ovmf,qemu,qemu-efi}/*";
+        firmware = "/usr{,/local}/share/{seabios,ovmf,qemu,qemu-efi}{,/x64,/ia32}/*";
     }
 
-    return profile_template.arg(apparmor_profile_name(), signal_peer, firmware, root_dir, program(),
-                                desc.image.image_path, desc.cloud_init_iso, mount_dirs);
+    return profile_template.arg(apparmor_profile_name(),
+                                signal_peer,
+                                firmware,
+                                root_dir,
+                                program(),
+                                desc.image.image_path,
+                                desc.cloud_init_iso,
+                                mount_dirs);
 }
 
 QString mp::QemuVMProcessSpec::identifier() const
